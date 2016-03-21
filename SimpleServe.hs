@@ -65,10 +65,10 @@ httpRequest res = concat
   where content = show res
 
 parseRequest :: [String] -> Maybe Request
-parseRequest reqHeaders
-  | (not.null) reqHeaders && length hh == 3 && isJust mMaybe =
-      Just Request { method, headers, uri }
-  | otherwise = Nothing
+parseRequest reqHeaders =
+  if (not.null) reqHeaders && length hh == 3 && isJust mMaybe
+  then Just Request { method, headers, uri }
+  else Nothing
   where hh = words . head $ reqHeaders
         [m, uri, _] = hh
         mMaybe = readMaybe m :: Maybe Method
