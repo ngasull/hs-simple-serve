@@ -1,8 +1,28 @@
+{-# LANGUAGE NamedFieldPuns #-}
+
 import Control.Applicative
 import Control.Concurrent
 import Control.Exception (bracket)
+import Data.List.Split (splitOn)
+import Data.Maybe (isJust)
+import qualified Data.Map as M
 import Network
 import System.IO
+import Text.Read (readMaybe)
+
+data Method = DELETE | GET | HEAD | POST | PUT deriving (Read, Show)
+
+data Request = Request { method :: Method
+                       , uri :: String
+                       , headers :: M.Map String String
+                       } deriving (Show)
+
+data Response = Response { body :: String
+                         , code :: Int
+                         }
+
+instance Show Response where
+  show Response { body, code } = concat [ show code, " : ", body, "\n" ]
 
 main = withSocketsDo $
   bracket (listenOn (PortNumber 8080)) sClose loop
@@ -15,12 +35,18 @@ loop sock = do
 
 handleRequest :: Handle -> IO ()
 handleRequest h = do
-  body <- getHeaders h
   -- body <- withFile "Setup.hs" ReadMode hGetContents
-  hPutStr h $ httpRequest body
+  req <- parseRequest <$> getHeaders h
+  let res = case req of
+          Just Request { method, uri } -> Response
+            { code = 200
+            , body = show method ++ " " ++ uri }
+          _ -> Response { code = 500, body = "Woupinnaiz!" }
 
-getHeaders :: Handle -> IO String
-getHeaders h = unlines <$> getHeaders' [] h
+  hPutStr h $ httpRequest res
+
+getHeaders :: Handle -> IO [String]
+getHeaders h = reverse <$> getHeaders' [] h
 
 getHeaders' :: [String] -> Handle -> IO [String]
 getHeaders' acc h = do
@@ -29,10 +55,23 @@ getHeaders' acc h = do
     then return acc
     else getHeaders' (line:acc) h
 
-httpRequest :: String -> String
-httpRequest body = concat
+httpRequest :: Response -> String
+httpRequest res = concat
   [ "HTTP/1.0 200 OK\r\n"
-  , "Content-Length: ", (show.length) body, "\r\n"
+  , "Content-Length: ", (show.length) content, "\r\n"
   , "\r\n"
-  , body
+  , content
   ]
+  where content = show res
+
+parseRequest :: [String] -> Maybe Request
+parseRequest reqHeaders
+  | (not.null) reqHeaders && length hh == 3 && isJust mMaybe =
+      Just Request { method, headers, uri }
+  | otherwise = Nothing
+  where hh = words . head $ reqHeaders
+        [m, uri, _] = hh
+        mMaybe = readMaybe m :: Maybe Method
+        Just method = mMaybe
+        headers = M.fromList [ (h, v) | l <- map (splitOn ": ") (tail reqHeaders)
+                                      , length l >= 2 , let h:v:_ = l ]
