@@ -1,5 +1,8 @@
 {-# LANGUAGE NamedFieldPuns #-}
 
+module Network.SimpleServe (listen, makeStore)
+where
+
 import Control.Applicative
 import Control.Concurrent
 import Control.Exception (bracket)
@@ -30,10 +33,9 @@ data Store = Store { mimes :: M.Map Mime [Ext]
 instance Show Response where
   show Response { body, code } = concat [ show code, " : ", body, "\n" ]
 
-main :: IO ()
-main = do
-  store <- makeStore
-  withSocketsDo $ bracket (listenOn (PortNumber 8080)) sClose (loop store)
+listen :: Store -> IO ()
+listen store = withSocketsDo $ bracket
+  (listenOn (PortNumber 8080)) sClose (loop store)
 
 loop :: Store -> Socket -> IO ()
 loop store sock = do
