@@ -5,23 +5,30 @@ where
 
 import Control.Applicative
 import Control.Concurrent
-import Control.Exception (bracket)
+import Control.Exception
 import Data.List.Split (splitOn)
 import Data.Maybe (isJust)
 import qualified Data.Map as M
+import Data.Typeable
 import Network
 import System.IO
+import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
 type Ext = String
 type Mime = String
 
-data Method = DELETE | GET | HEAD | POST | PUT deriving (Read, Show)
+data Method = DELETE | GET | HEAD | POST | PUT
+  deriving (Read, Show)
 
 data Request = Request { method :: Method
                        , uri :: String
                        , headers :: M.Map String [String]
-                       } deriving (Show)
+                       }
+             | InvalidRequest String
+  deriving (Show)
+
+type RequestError = String
 
 data Response = Response { body :: String
                          , code :: Int
@@ -44,24 +51,34 @@ loop store sock = do
   loop store sock
 
 handleRequest :: Store -> Handle -> IO ()
-handleRequest store h = do
-  req <- parseRequest <$> getHeaders h
-  let res = case req of
-          Just Request { method, uri } -> Response
+handleRequest store h =
+  hPutStr h . httpRequest =<< reqToRes =<< req
+  where req = do
+          headersOrError <- getHeaders h
+          return $ case headersOrError of
+            Left headers -> parseRequest headers
+            Right err -> InvalidRequest err
+        reqToRes req = return $ case req of
+          Request { method, uri } -> Response
             { code = 200
             , body = show method ++ " " ++ uri }
-          _ -> Response { code = 500, body = "Woupinnaiz!" }
+          InvalidRequest msg -> Response { code = 500, body = "Woupinnaiz! " ++ msg }
+        writeRes = hPutStr h
 
-  hPutStr h $ httpRequest res
-
-getHeaders :: Handle -> IO [String]
-getHeaders h = reverse <$> getHeaders' []
-  where getHeaders' :: [String] -> IO [String]
-        getHeaders' acc = do
-          line <- hGetLine h
-          if line == "\r"
-            then return acc
-            else getHeaders' (line:acc)
+getHeaders :: Handle -> IO (Either [String] RequestError)
+getHeaders h = getHeaders' []
+  where getHeaders' :: [String] -> IO (Either [String] RequestError)
+        getHeaders' acc =
+          if length acc > maxHeaders then failure
+          else do
+            line <- timeout 10000 (hGetLine h)
+            case line of
+              Just "\r" -> return (Left (reverse acc))
+              Just line -> getHeaders' (line:acc)
+              _ -> failure
+        failure = return $ Right "Could not finish to read the headers properly"
+        maxHeaders = 20
+        readTimeout = 10e6
 
 getMimeDictionnary :: IO (M.Map Mime [Ext])
 getMimeDictionnary = M.fromList . mapMimeToExt <$> readFile "/etc/mime.types"
@@ -83,11 +100,11 @@ makeStore = do
   mimes <- getMimeDictionnary
   return Store { mimes }
 
-parseRequest :: [String] -> Maybe Request
+parseRequest :: [String] -> Request
 parseRequest reqHeaders =
   if not (null reqHeaders) && length hh == 3 && isJust mMaybe
-  then Just Request { method, headers, uri }
-  else Nothing
+  then Request { method, headers, uri }
+  else InvalidRequest "Top header isn't parseable"
   where hh = words (head reqHeaders)
         [m, uri, _] = hh
         mMaybe = readMaybe m :: Maybe Method
